@@ -5,6 +5,7 @@ import pandas as pd
 import exifread
 from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime
+import re
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -52,22 +53,14 @@ def load_ledger(path, line_name):
     读取台账Excel，并根据线路名称过滤，返回包含杆塔编号与坐标的DataFrame
     """
     df = pd.read_excel(path, dtype={"杆塔编号": str})
-    # 过滤对应线路名称，并去掉塔号为空的行
     df = df[df['线路名称'] == line_name].dropna(subset=['杆塔编号'])
-    # 确保杆塔编号是字符串格式（无 NaN）
     df['杆塔编号'] = df['杆塔编号'].astype(str)
     return df[["杆塔编号", "经度", "纬度"]].rename(columns={"杆塔编号": "tower"})
 
 def classify_channels(ledger_file, src_folder, output_root, line_name, threshold):
     """
-    仅提取“通道照片”：
-      ledger_file: 台账文件路径（Excel）
-      src_folder: 源照片文件夹
-      output_root: 分类后照片保存根目录
-      line_name: 巡视线路名称
-      threshold: 距离阈值（米）
+    仅提取“通道照片”，并在遇到台账错误时跳过相关塔号的精细化和通道照片
     """
-
     # —— 第一步：删除文件名含 "_T" 但不含 "_T_" 的红外照片违例文件 —— #
     for p in glob.glob(os.path.join(src_folder, '*.*')):
         fn = os.path.basename(p)
@@ -94,10 +87,13 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
     # 用于记录每个塔的“可见光精细化”照片的时间窗
     tower_times = {t: {'min': None, 'max': None} for t in towers}
 
-    # —— 第一轮：识别“精细化”和“红外照片”，并记录“精细化”时间窗 —— #
+    # —— 第一轮：识别“精细化”和“红外照片”，记录时间窗，并跳过台账错误塔号 —— #
     candidates = []  # 距离阈值之外或未判定的图片，供第二轮使用
+    skip_mode = False
+    skipped_towers = set()
+
     for img in imgs:
-        # GPS 信息缺失则跳过
+        name = os.path.basename(img['path'])
         if img['lat'] is None:
             continue
 
@@ -106,20 +102,35 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
             lambda r: haversine(img['lat'], img['lon'], r['纬度'], r['经度']), axis=1
         )
         min_dist = ledger['dist'].min()
-        # 如果最小距离超过阈值，延后第二轮处理
+
+        # 如果处于跳过模式，持续跳过，直到遇到可匹配的精细化照片
+        if skip_mode:
+            if min_dist <= threshold:
+                skip_mode = False
+            else:
+                continue
+
+        # 如果最小距离超过阈值，判断是否进入跳过模式
         if min_dist > threshold:
+            # 如果是自主飞行的精细化或红外照片，进入跳过模式
+            if '_V_' in name or '_T_' in name:
+                skip_mode = True
+                # 尝试从文件名中提取塔号
+                m = re.match(r'(\d+)', name)
+                if m:
+                    skipped_towers.add(m.group(1))
+                continue
+            # 否则，延后第二轮处理
             candidates.append(img)
             continue
 
         # 找到最近的塔
         row = ledger.loc[ledger['dist'].idxmin()]
-        name = os.path.basename(img['path'])
         img['tower'] = row['tower']
 
         # 根据文件名简单判别类别：“_V_”代表可见光精细化，“_T_”代表红外照片
         if '_V_' in name:
             img['cat'] = '精细化'
-            # 记录该塔的可见光最早/最晚拍摄时间
             if img['time']:
                 tt = tower_times[img['tower']]
                 if tt['min'] is None or img['time'] < tt['min']:
@@ -132,8 +143,16 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
             # 不符合上述两类，作为候选在第二轮决定是否为“通道照片”
             candidates.append(img)
 
+    # 输出被跳过的杆塔号日志
+    if skipped_towers:
+        try:
+            sorted_ids = sorted(map(int, skipped_towers))
+            sorted_ids = list(map(str, sorted_ids))
+        except ValueError:
+            sorted_ids = list(skipped_towers)
+        print(f"[跳过杆塔] {'，'.join(sorted_ids)}，可能存在坐标错误")
+
     # —— 构建“通道”时间窗 —— #
-    # 按照塔号数值大小排序，注意此时 towers 中已全部为字符串数字，且无 NaN
     seq = sorted(towers, key=lambda x: int(x))
     windows = []
 
@@ -175,7 +194,6 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
                     img['cat'] = '通道'
                     break
             else:
-                # t_end 为 None，意味着之后所有时间点都算该塔的通道照片
                 if img['time'] > t_start:
                     if '_T' in os.path.basename(img['path']):
                         os.remove(img['path'])
@@ -188,7 +206,6 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
     base = os.path.join(output_root, line_name, '通道')
     os.makedirs(base, exist_ok=True)
 
-    # 将所有标记为“通道照片”且存在物理文件的图片，按塔号归类到对应子目录
     for img in imgs:
         if img.get('cat') == '通道' and img.get('tower') and os.path.isfile(img['path']):
             dst = os.path.join(base, img['tower'])
@@ -204,23 +221,4 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
         df = pd.DataFrame(records)
         print("“通道照片”统计：")
         print(df['tower'].value_counts())
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='仅提取通道照片的工具')
-    parser.add_argument('--ledger-file', required=True, help='台账文件路径（Excel）')
-    parser.add_argument('--src-folder', required=True, help='源照片文件夹')
-    parser.add_argument('--output-root', required=True, help='输出根目录')
-    parser.add_argument('--line-name', required=True, help='巡视线路名称')
-    parser.add_argument('--threshold', type=float, default=50.0, help='距离阈值（米）')
-    args = parser.parse_args()
-
-    classify_channels(
-        ledger_file=args.ledger_file,
-        src_folder=args.src_folder,
-        output_root=args.output_root,
-        line_name=args.line_name,
-        threshold=args.threshold
-    )
     print('“通道照片”提取完成。')
