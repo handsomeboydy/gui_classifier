@@ -189,7 +189,7 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
     os.makedirs(base, exist_ok=True)
 
     # 将所有标记为“通道照片”且存在物理文件的图片，按塔号归类到对应子目录
-    for img in imgs + candidates:
+    for img in imgs:
         if img.get('cat') == '通道' and img.get('tower') and os.path.isfile(img['path']):
             dst = os.path.join(base, img['tower'])
             os.makedirs(dst, exist_ok=True)
