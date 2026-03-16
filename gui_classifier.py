@@ -16,14 +16,43 @@ import classify
 import classify_autonomous
 import classify_channels
 
+APP_VERSION = "1.0.1"  # 跟你 Release tag 对齐，如 v1.0.0
+import updater_github
+
+
 # Config file for persisting ledger library path（保持你原来的用法）
 CONFIG_FILE = os.path.join(os.getcwd(), 'gui_classifier_config.json')
 
-# === 单 EXE 多模式：加入分发器（必须在创建主窗口前调用） ===
-from multi_mode_launcher import dispatch_mode_or_continue, spawn_self
-dispatch_mode_or_continue()
-# =======================================================
 
+def check_update_ui(self, silent=False):
+    def worker():
+        try:
+            if silent and (not updater_github.should_check_now()):
+                return
+            updater_github.mark_checked()
+
+            latest, notes, tmp_exe = updater_github.prepare_update(APP_VERSION)
+            if not tmp_exe:
+                if not silent:
+                    self.after(0, lambda: messagebox.showinfo("检查更新", "当前已是最新版本。"))
+                return
+
+            def ask():
+                ok = messagebox.askyesno(
+                    "发现新版本",
+                    f"当前版本：{APP_VERSION}\n最新版本：{latest}\n\n更新说明：\n{notes}\n\n是否立即更新？"
+                )
+                if ok:
+                    updater_github.apply_update_and_restart(tmp_exe)
+                    messagebox.showinfo("更新", "已开始更新，程序将自动重启。")
+                    self.destroy()  # 退出让 bat 覆盖 exe
+            self.after(0, ask)
+
+        except Exception as e:
+            if not silent:
+                self.after(0, lambda: messagebox.showwarning("检查更新失败", str(e)))
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def redirect_stdout_to_widget(widget):
     class TextRedirector(object):
@@ -54,7 +83,11 @@ class ClassifierGUI(tk.Tk):
         self._out_auto_set = False
 
         self._build_widgets()
+        self._build_menu()
         self._load_config()
+
+        # 启动后静默检查更新（有更新才弹窗）
+        self.after(800, lambda: check_update_ui(self, silent=True))
 
     def _build_widgets(self):
         row = 0
@@ -109,7 +142,7 @@ class ClassifierGUI(tk.Tk):
         row += 1
         btn_frame2 = tk.Frame(self)
         btn_frame2.grid(row=row, column=0, columnspan=3, pady=10, sticky="we")
-        for c in range(6):
+        for c in range(7):
             btn_frame2.grid_columnconfigure(c, weight=1)
 
         start_btn = tk.Button(
@@ -121,6 +154,16 @@ class ClassifierGUI(tk.Tk):
         )
         start_btn.grid(row=0, column=1, sticky="we")
 
+        update_btn = tk.Button(
+            btn_frame2,
+            text="检查更新",
+            command=lambda: check_update_ui(self, silent=False),
+            bg="#FF9800",
+            fg="white"
+        )
+        update_btn.grid(row=0, column=3, sticky="we")
+
+
         ext_btn = tk.Button(
             btn_frame2,
             text="拓展工具",
@@ -128,7 +171,10 @@ class ClassifierGUI(tk.Tk):
             bg="#2196F3",
             fg="white"
         )
-        ext_btn.grid(row=0, column=4, sticky="we")
+        ext_btn.grid(row=0, column=5, sticky="we")
+        
+
+        
 
         # 日志输出区
         row += 1
@@ -138,6 +184,18 @@ class ClassifierGUI(tk.Tk):
 
         self.grid_rowconfigure(row, weight=1)
         self.grid_columnconfigure(1, weight=1)
+
+    def _build_menu(self):
+        """菜单栏：帮助 -> 检查更新 / 关于"""
+        menubar = tk.Menu(self)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="检查更新", command=lambda: check_update_ui(self, silent=False))
+        help_menu.add_separator()
+        help_menu.add_command(label="关于", command=lambda: messagebox.showinfo("关于", f"版本：{APP_VERSION}"))
+        menubar.add_cascade(label="帮助", menu=help_menu)
+
+        self.config(menu=menubar)
 
     def _load_config(self):
         try:
@@ -288,6 +346,7 @@ class ClassifierGUI(tk.Tk):
                         line_name=line,
                         threshold=thresh
                     )
+            self._cleanup_skip_ir(out, line)
             print("\n总体分类完成。")
             messagebox.showinfo("完成", "照片分类已完成")
         except Exception as e:
@@ -295,6 +354,20 @@ class ClassifierGUI(tk.Tk):
             messagebox.showerror("运行出错", str(e))
         finally:
             sys.stdout = sys.stderr = sys_stdout
+
+    def _cleanup_skip_ir(self, output_root: str, line_name: str):
+        """删除分类过程遗留的 skip_ir.txt（不影响分图逻辑）"""
+        candidates = [
+            os.path.join(output_root, line_name, "skip_ir.txt"),
+            os.path.join(output_root, "skip_ir.txt"),
+        ]
+        for p in candidates:
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+                    print(f"已删除遗留文件: {p}")
+            except Exception as e:
+                print(f"删除遗留文件失败: {p} -> {e}")
 
     def _open_extension(self):
         """
