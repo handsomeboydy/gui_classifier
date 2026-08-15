@@ -16,7 +16,7 @@ import classify
 import classify_autonomous
 import classify_channels
 
-APP_VERSION = "1.0.1"  # 必须与当前 Release tag 对齐
+APP_VERSION = "1.1.0"  # 必须与当前 Release tag 对齐
 import updater_github
 from reporting import ResultRecorder
 from preflight import LEVEL_ERROR, LEVEL_WARNING, preflight

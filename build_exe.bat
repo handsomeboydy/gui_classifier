@@ -71,11 +71,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM 生成 SHA-256 校验文件（供更新器强制校验，E2/E6）
+if exist "dist\御3T分图工具.exe" (
+    powershell -NoProfile -Command "(Get-FileHash -LiteralPath 'dist\御3T分图工具.exe' -Algorithm SHA256).Hash | Set-Content -LiteralPath 'dist\御3T分图工具.exe.sha256' -Encoding ascii"
+    echo SHA-256 已写入 dist\御3T分图工具.exe.sha256
+)
+
 echo.
 echo ========================================
 echo 打包完成！
 echo 输出文件：
 echo %cd%\dist\御3T分图工具.exe
+echo 校验文件：
+echo %cd%\dist\御3T分图工具.exe.sha256
 echo ========================================
 
 if exist "%cd%\dist" (
