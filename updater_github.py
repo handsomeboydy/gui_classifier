@@ -12,7 +12,7 @@ from typing import Optional, Tuple
 
 # ====== 你需要改这里（仓库 & 资产名）======
 REPO = "handsomeboydy/gui_classifier"
-ASSET_NAME_PATTERN = r"^mavic3T\.exe$" # 你 release 里 exe 的文件名规则
+ASSET_NAME_PATTERN = r"^御3T分图工具\.exe$"  # 与构建产物名保持一致（D-08）
 # ==========================================
 
 def _api_latest_release_url() -> str:

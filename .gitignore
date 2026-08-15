@@ -1,0 +1,21 @@
+# 构建产物
+build/
+dist/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 本地运行时配置
+gui_classifier_config.json
+button3_config.json
+
+# 大体积演示文件
+使用录屏.mp4
+
+# 历史仓库副本（仅参考，不参与版本管理）
+repo_tmp/
+
+# Codex / 工具元数据
+.agents/
+.codex/

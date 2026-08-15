@@ -75,7 +75,7 @@ echo.
 echo ========================================
 echo 打包完成！
 echo 输出文件：
-echo %cd%\dist\gui_classifier.exe
+echo %cd%\dist\御3T分图工具.exe
 echo ========================================
 
 if exist "%cd%\dist" (

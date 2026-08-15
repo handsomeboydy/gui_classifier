@@ -16,13 +16,17 @@ import classify
 import classify_autonomous
 import classify_channels
 
-APP_VERSION = "1.0.1"  # 跟你 Release tag 对齐，如 v1.0.0
+APP_VERSION = "1.0.1"  # 必须与当前 Release tag 对齐
 import updater_github
 
 
 # Config file for persisting ledger library path（保持你原来的用法）
 CONFIG_FILE = os.path.join(os.getcwd(), 'gui_classifier_config.json')
 
+# === 单 EXE 多模式：分发调用保持模块顶部唯一一次，且在创建主窗口前执行 ===
+import threading
+from tkinter import messagebox
+# =======================================================
 
 def check_update_ui(self, silent=False):
     def worker():
@@ -77,17 +81,27 @@ class ClassifierGUI(tk.Tk):
         self.title("智能作业一班_御3T分图工具")
         self.geometry("600x550")
 
-        # 支持多个源文件夹
         self.src_dirs = []
-        # 标记输出目录是否已手动设置
         self._out_auto_set = False
 
         self._build_widgets()
-        self._build_menu()
+        self._build_menu()          # ✅ 新增：菜单栏
         self._load_config()
 
-        # 启动后静默检查更新（有更新才弹窗）
+        # ✅ 可选：启动后静默检查更新（有更新才弹）
         self.after(800, lambda: check_update_ui(self, silent=True))
+
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="检查更新", command=lambda: check_update_ui(self, silent=False))
+        help_menu.add_separator()
+        help_menu.add_command(label="关于", command=lambda: messagebox.showinfo("关于", f"版本：{APP_VERSION}"))
+        menubar.add_cascade(label="帮助", menu=help_menu)
+
+        self.config(menu=menubar)
+
 
     def _build_widgets(self):
         row = 0
@@ -154,6 +168,7 @@ class ClassifierGUI(tk.Tk):
         )
         start_btn.grid(row=0, column=1, sticky="we")
 
+
         update_btn = tk.Button(
             btn_frame2,
             text="检查更新",
@@ -172,9 +187,6 @@ class ClassifierGUI(tk.Tk):
             fg="white"
         )
         ext_btn.grid(row=0, column=5, sticky="we")
-        
-
-        
 
         # 日志输出区
         row += 1
@@ -184,18 +196,6 @@ class ClassifierGUI(tk.Tk):
 
         self.grid_rowconfigure(row, weight=1)
         self.grid_columnconfigure(1, weight=1)
-
-    def _build_menu(self):
-        """菜单栏：帮助 -> 检查更新 / 关于"""
-        menubar = tk.Menu(self)
-
-        help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="检查更新", command=lambda: check_update_ui(self, silent=False))
-        help_menu.add_separator()
-        help_menu.add_command(label="关于", command=lambda: messagebox.showinfo("关于", f"版本：{APP_VERSION}"))
-        menubar.add_cascade(label="帮助", menu=help_menu)
-
-        self.config(menu=menubar)
 
     def _load_config(self):
         try:
@@ -346,7 +346,7 @@ class ClassifierGUI(tk.Tk):
                         line_name=line,
                         threshold=thresh
                     )
-            self._cleanup_skip_ir(out, line)
+                self._cleanup_skip_ir(out, line)
             print("\n总体分类完成。")
             messagebox.showinfo("完成", "照片分类已完成")
         except Exception as e:
@@ -356,18 +356,13 @@ class ClassifierGUI(tk.Tk):
             sys.stdout = sys.stderr = sys_stdout
 
     def _cleanup_skip_ir(self, output_root: str, line_name: str):
-        """删除分类过程遗留的 skip_ir.txt（不影响分图逻辑）"""
-        candidates = [
-            os.path.join(output_root, line_name, "skip_ir.txt"),
-            os.path.join(output_root, "skip_ir.txt"),
-        ]
-        for p in candidates:
-            try:
-                if os.path.isfile(p):
-                    os.remove(p)
-                    print(f"已删除遗留文件: {p}")
-            except Exception as e:
-                print(f"删除遗留文件失败: {p} -> {e}")
+        """自主分类全部完成后删除两个阶段之间的临时文件。"""
+        skip_path = os.path.join(output_root, line_name, "skip_ir.txt")
+        try:
+            os.remove(skip_path)
+            print(f"已删除临时文件: {skip_path}")
+        except FileNotFoundError:
+            pass
 
     def _open_extension(self):
         """
