@@ -55,9 +55,11 @@ def load_ledger(path, line_name):
     df['tower'] = df['tower'].astype(str)
     return df[['tower','经度','纬度']]
 
-def classify_channels(ledger_file, src_folder, output_root, line_name, threshold):
+def classify_channels(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
     """
     只输出“通道照片”，并生成 skip_ir 列表供其他脚本使用。
+
+    recorder: 可选 ResultRecorder，记录通道照片的最终结果；不影响分类结果。
     """
     # 1. 加载台账与照片 metadata
     ledger = load_ledger(ledger_file, line_name)
@@ -65,7 +67,10 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
 
     imgs = []
     for p in glob.glob(os.path.join(src_folder, '*.*')):
-        lat, lon, ts = get_exif(p)
+        try:
+            lat, lon, ts = get_exif(p)
+        except Exception:
+            lat = lon = ts = None
         imgs.append({'path': p, 'lat': lat, 'lon': lon, 'time': ts, 'tower': None, 'cat': None})
 
     # 2. 第一轮：标记精细化(V) 与 初步红外(T)
@@ -130,10 +135,25 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
     os.makedirs(base, exist_ok=True)
     for img in candidates:
         if img.get('cat') == '通道' and img.get('tower'):
-            dst = os.path.join(base, img['tower'])
-            os.makedirs(dst, exist_ok=True)
-            shutil.copy(img['path'], dst)
-            print(f"[通道] {img['path']} → {dst}")
+            dst_dir = os.path.join(base, img['tower'])
+            os.makedirs(dst_dir, exist_ok=True)
+            dst_file = os.path.join(dst_dir, os.path.basename(img['path']))
+            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
+            shutil.copy(img['path'], dst_dir)
+            print(f"[通道] {img['path']} → {dst_dir}")
+            if recorder is not None:
+                recorder.record(
+                    src_folder,
+                    os.path.basename(img['path']),
+                    源文件完整路径=img['path'],
+                    EXIF状态="正常",
+                    纬度=img['lat'],
+                    经度=img['lon'],
+                    最近杆塔=img['tower'],
+                    分类结果="通道",
+                    目标路径=dst_file,
+                    冲突处理=conflict,
+                )
 
     print('classify_channels: 通道照片提取完成，skip_ir 写入', skip_file)
 

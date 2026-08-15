@@ -18,6 +18,7 @@ import classify_channels
 
 APP_VERSION = "1.0.1"  # 必须与当前 Release tag 对齐
 import updater_github
+from reporting import ResultRecorder
 
 
 # Config file for persisting ledger library path（保持你原来的用法）
@@ -151,6 +152,12 @@ class ClassifierGUI(tk.Tk):
         self.mode_var = tk.StringVar(value="manual")
         tk.Radiobutton(self, text="手动飞行", variable=self.mode_var, value="manual").grid(row=row, column=1, sticky="w")
         tk.Radiobutton(self, text="自主飞行", variable=self.mode_var, value="auto").grid(row=row, column=2, sticky="w")
+
+        # 结果清单脱敏开关（D-04）
+        row += 1
+        tk.Label(self, text="结果清单:").grid(row=row, column=0, sticky="e")
+        self.sanitize_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(self, text="脱敏输出（路径只留文件名，坐标保留两位小数）", variable=self.sanitize_var).grid(row=row, column=1, columnspan=2, sticky="w")
 
         # 按钮行：开始分类 & 拓展工具（各占 GUI 宽度的 1/6）
         row += 1
@@ -313,6 +320,7 @@ class ClassifierGUI(tk.Tk):
             messagebox.showerror("参数错误", f"未找到台账文件: {ledger_file}")
             return
 
+        recorder = ResultRecorder()
         sys_stdout = sys.stdout
         sys.stderr = sys.stdout = redirect_stdout_to_widget(self.log_text)
 
@@ -325,7 +333,8 @@ class ClassifierGUI(tk.Tk):
                         src_folder=src_folder,
                         output_root=out,
                         line_name=line,
-                        threshold=thresh
+                        threshold=thresh,
+                        recorder=recorder
                     )
             else:
                 for src_folder in self.src_dirs:
@@ -336,7 +345,8 @@ class ClassifierGUI(tk.Tk):
                         src_folder=src_folder,
                         output_root=out,
                         line_name=line,
-                        threshold=thresh
+                        threshold=thresh,
+                        recorder=recorder
                     )
                     print("通道分类完成。\n")
                     classify_autonomous.classify_autonomous(
@@ -344,12 +354,25 @@ class ClassifierGUI(tk.Tk):
                         src_folder=src_folder,
                         output_root=out,
                         line_name=line,
-                        threshold=thresh
+                        threshold=thresh,
+                        recorder=recorder
                     )
                 self._cleanup_skip_ir(out, line)
+            csv_path = recorder.write_csv(out, line, sanitize=self.sanitize_var.get())
+            summary = recorder.summary()
             print("\n总体分类完成。")
-            messagebox.showinfo("完成", "照片分类已完成")
+            print(f"结果清单位置: {csv_path}")
+            print(f"扫描文件总数: {summary['总数']}")
+            for result, count in summary["分类结果"].items():
+                print(f"  {result}: {count}")
+            for reason, count in summary["结果原因"].items():
+                print(f"  原因[{reason}]: {count}")
+            messagebox.showinfo("完成", f"照片分类已完成\n清单位置:\n{csv_path}")
         except Exception as e:
+            try:
+                recorder.write_csv(out, line, sanitize=self.sanitize_var.get())
+            except Exception:
+                pass
             print(f"运行出错: {e}\n")
             messagebox.showerror("运行出错", str(e))
         finally:

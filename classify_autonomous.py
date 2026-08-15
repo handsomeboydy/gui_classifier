@@ -57,7 +57,7 @@ def determine_side(curr, adj, img):
     if cross<0: return '右'
     return None
 
-def classify_autonomous(ledger_file, src_folder, output_root, line_name, threshold):
+def classify_autonomous(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
     # 加载 skip_ir 列表
     skip_path = os.path.join(output_root, line_name, 'skip_ir.txt')
     if os.path.isfile(skip_path):
@@ -81,22 +81,40 @@ def classify_autonomous(ledger_file, src_folder, output_root, line_name, thresho
     # 遍历分类
     for img_path in glob.glob(os.path.join(src_folder,'*.*')):
         fn = os.path.basename(img_path)
+
+        def rec(**fields):
+            if recorder is not None:
+                recorder.record(src_folder, fn, 源文件完整路径=img_path, **fields)
+
+        # 通道照片已在第一阶段记录最终结果，第二阶段不覆盖
+        if recorder is not None and recorder.has_result(src_folder, fn):
+            continue
         # 跳过标记 IR
         if fn.endswith('.jpg') and '_T_' in fn and fn in skip_ir:
+            rec(分类结果="跳过", 结果原因="skip_ir 对应红外")
             continue
-        lat, lon = get_image_gps(img_path)
+        try:
+            lat, lon = get_image_gps(img_path)
+        except Exception as e:
+            print(f"[解析失败] {fn}：{e}")
+            rec(EXIF状态="解析失败", 分类结果="跳过", 结果原因="解析失败")
+            continue
         if lat is None:
             print(f"[跳过无GPS] {fn}")
+            rec(EXIF状态="无 GPS", 分类结果="跳过", 结果原因="无GPS")
             continue
         ledger['dist'] = ledger.apply(lambda r: haversine(lat,lon,r['纬度'],r['经度']),axis=1)
         row = ledger.loc[ledger['dist'].idxmin()]
-        dist = ledger['dist'].min()
+        dist = float(ledger['dist'].min())
         tower = row['tower']
         # 距离内才分类
         if dist>threshold:
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(dist,1), 分类结果="跳过", 结果原因="超阈值")
             continue
         # 侧别过滤
         expected = get_expected_side_for_tower(side_str,int(tower))
+        actual = None
         if expected in ('左','右'):
             idx = seq.index(tower)
             adj = seq[idx+1] if idx<len(seq)-1 else seq[idx-1]
@@ -104,18 +122,35 @@ def classify_autonomous(ledger_file, src_folder, output_root, line_name, thresho
             other = df_sorted[df_sorted['tower']==adj][['纬度','经度']].iloc[0]
             actual = determine_side((curr['纬度'],curr['经度']),(other['纬度'],other['经度']), (lat,lon))
             if actual!=expected:
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                    分类结果="跳过", 结果原因="侧别不符")
                 continue
         # 分类并输出
         if '_T_' in fn:
             dst = os.path.join(ir_base, tower)
             os.makedirs(dst, exist_ok=True)
+            dst_file = os.path.join(dst, fn)
+            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
             shutil.copy(img_path,dst)
             print(f"[红外] {fn} → {dst}")
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                分类结果="红外照片", 目标路径=dst_file, 冲突处理=conflict)
         elif '_V_' in fn:
             dst = os.path.join(fine_base, tower)
             os.makedirs(dst, exist_ok=True)
+            dst_file = os.path.join(dst, fn)
+            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
             shutil.copy(img_path,dst)
             print(f"[精细化] {fn} → {dst}")
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                分类结果="精细化", 目标路径=dst_file, 冲突处理=conflict)
+        else:
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                分类结果="跳过", 结果原因="命名不识别")
     print('自主飞行 IR & 精细化 分类完成。')
 
 if __name__=='__main__':

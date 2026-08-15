@@ -109,9 +109,11 @@ def determine_side(prev_coord, curr_coord, next_coord, img_coord):
     return None
 
 
-def classify(ledger_file, src_folder, output_root, line_name, threshold):
+def classify(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
     """
     对手动飞行的照片进行分类（支持部分同塔分段侧别配置）。
+
+    recorder: 可选 ResultRecorder，用于记录一文件一结果；不影响分类结果。
     """
     # 1. 加载台账与侧别配置
     ledger = load_ledger(ledger_file)
@@ -129,22 +131,38 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold):
 
     # 4. 遍历照片
     for img_path in glob.glob(os.path.join(src_folder, '*.*')):
-        lat, lon = get_image_gps(img_path)
+        filename = os.path.basename(img_path)
+
+        def rec(**fields):
+            if recorder is not None:
+                recorder.record(src_folder, filename, 源文件完整路径=img_path, **fields)
+
+        try:
+            lat, lon = get_image_gps(img_path)
+        except Exception as e:
+            print(f"[解析失败] {img_path}：{e}")
+            rec(EXIF状态="解析失败", 分类结果="跳过", 结果原因="解析失败")
+            continue
         if lat is None:
             print(f"[跳过，无 GPS] {img_path}")
+            rec(EXIF状态="无 GPS", 分类结果="跳过", 结果原因="无GPS")
             continue
 
         ledger['dist'] = ledger.apply(
             lambda r: haversine(lat, lon, r['纬度'], r['经度']), axis=1
         )
         closest = ledger.loc[ledger['dist'].idxmin()]
-        if closest['dist'] > threshold:
-            print(f"[未匹配] {img_path}，最小距离 {closest['dist']:.1f}m")
+        closest_dist = float(closest['dist'])
+        if closest_dist > threshold:
+            print(f"[未匹配] {img_path}，最小距离 {closest_dist:.1f}m")
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=closest['杆塔编号'],
+                最近距离=round(closest_dist, 1), 分类结果="跳过", 结果原因="超阈值")
             continue
 
         tower = closest['杆塔编号']
         tower_int = int(tower)
         expected_side = get_expected_side_for_tower(raw_side_str, tower_int)
+        actual_side = None
 
         # 5. 如果 expected_side 指定了 "左" 或 "右"，则进行侧别过滤
         if expected_side in ('左', '右'):
@@ -152,6 +170,9 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold):
                 idx = towers_seq.index(tower)
             except ValueError:
                 print(f"[跳过，台账中找不到塔号] {img_path} → 塔 {tower}")
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(closest_dist, 1), 期望侧别=expected_side,
+                    分类结果="跳过", 结果原因="台账中找不到塔号")
                 continue
 
             curr_row = ledger_sorted[ledger_sorted['杆塔编号'] == tower].iloc[0]
@@ -179,6 +200,9 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold):
 
             if actual_side != expected_side:
                 print(f"[跳过，侧别不符] {img_path} → 塔 {tower} (期望 {expected_side}，实际 {actual_side})")
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(closest_dist, 1), 期望侧别=expected_side,
+                    实际侧别=actual_side, 分类结果="跳过", 结果原因="侧别不符")
                 continue
 
         # 6. 分类并拷贝
@@ -186,8 +210,14 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold):
         category = "红外照片" if '_T' in name else "精细化"
         dest = os.path.join(output_root, line_name, category, tower)
         os.makedirs(dest, exist_ok=True)
+        dest_file = os.path.join(dest, name)
+        conflict = "覆盖" if os.path.exists(dest_file) else "无冲突"
         shutil.copy(img_path, dest)
         print(f"[已分类] {img_path} → {dest}")
+        rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+            最近距离=round(closest_dist, 1), 期望侧别=expected_side,
+            实际侧别=actual_side, 分类结果=category, 目标路径=dest_file,
+            冲突处理=conflict)
 
         # 7. 生成空通道文件夹
         if category == "精细化":
