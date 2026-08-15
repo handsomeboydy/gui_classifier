@@ -5,6 +5,7 @@ import pandas as pd
 import exifread
 from math import radians, sin, cos, sqrt, atan2
 from side_parser import get_expected_side_for_tower
+from preflight import is_supported_file, iter_src_files
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -57,29 +58,33 @@ def determine_side(curr, adj, img):
     if cross<0: return '右'
     return None
 
-def classify_autonomous(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
+def classify_autonomous(ledger_file, src_folder, output_root, line_name, threshold, recorder=None,
+                        conflict_policy="覆盖", dry_run=False):
     # 加载 skip_ir 列表
     skip_path = os.path.join(output_root, line_name, 'skip_ir.txt')
-    if os.path.isfile(skip_path):
-        with open(skip_path) as f:
-            skip_ir = {l.strip() for l in f if l.strip()}
-    else:
-        skip_ir = set()
+    skip_ir = recorder.get_skip_ir() if recorder is not None else None
+    if skip_ir is None:
+        if os.path.isfile(skip_path):
+            with open(skip_path) as f:
+                skip_ir = {l.strip() for l in f if l.strip()}
+        else:
+            skip_ir = set()
     # 加载台账与侧别配置
     ledger = load_ledger(ledger_file)
     side_str = load_double_tower_side(ledger_file, line_name)
     # 准备输出目录
     fine_base = os.path.join(output_root, line_name, '精细化')
     ir_base   = os.path.join(output_root, line_name, '红外照片')
-    os.makedirs(fine_base, exist_ok=True)
-    os.makedirs(ir_base, exist_ok=True)
+    if not dry_run:
+        os.makedirs(fine_base, exist_ok=True)
+        os.makedirs(ir_base, exist_ok=True)
     # 排序塔序
     df_sorted = ledger.copy()
     df_sorted['idx']=df_sorted['tower'].astype(int)
     df_sorted.sort_values('idx', inplace=True)
     seq = df_sorted['tower'].tolist()
     # 遍历分类
-    for img_path in glob.glob(os.path.join(src_folder,'*.*')):
+    for img_path in iter_src_files(src_folder):
         fn = os.path.basename(img_path)
 
         def rec(**fields):
@@ -88,6 +93,10 @@ def classify_autonomous(ledger_file, src_folder, output_root, line_name, thresho
 
         # 通道照片已在第一阶段记录最终结果，第二阶段不覆盖
         if recorder is not None and recorder.has_result(src_folder, fn):
+            continue
+        if not is_supported_file(img_path):
+            print(f"[格式不支持] {fn}")
+            rec(EXIF状态="格式不支持", 分类结果="跳过", 结果原因="格式不支持")
             continue
         # 跳过标记 IR
         if fn.endswith('.jpg') and '_T_' in fn and fn in skip_ir:
@@ -129,9 +138,21 @@ def classify_autonomous(ledger_file, src_folder, output_root, line_name, thresho
         # 分类并输出
         if '_T_' in fn:
             dst = os.path.join(ir_base, tower)
-            os.makedirs(dst, exist_ok=True)
             dst_file = os.path.join(dst, fn)
-            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
+            existed = os.path.exists(dst_file)
+            if existed and conflict_policy == "跳过":
+                print(f"[跳过，输出冲突] {fn} → {dst_file}")
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                    分类结果="跳过", 结果原因="输出冲突", 目标路径=dst_file, 冲突处理="跳过")
+                continue
+            conflict = "覆盖" if existed else "无冲突"
+            if dry_run:
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                    分类结果="红外照片", 目标路径=dst_file, 冲突处理=conflict)
+                continue
+            os.makedirs(dst, exist_ok=True)
             shutil.copy(img_path,dst)
             print(f"[红外] {fn} → {dst}")
             rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
@@ -139,9 +160,21 @@ def classify_autonomous(ledger_file, src_folder, output_root, line_name, thresho
                 分类结果="红外照片", 目标路径=dst_file, 冲突处理=conflict)
         elif '_V_' in fn:
             dst = os.path.join(fine_base, tower)
-            os.makedirs(dst, exist_ok=True)
             dst_file = os.path.join(dst, fn)
-            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
+            existed = os.path.exists(dst_file)
+            if existed and conflict_policy == "跳过":
+                print(f"[跳过，输出冲突] {fn} → {dst_file}")
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                    分类结果="跳过", 结果原因="输出冲突", 目标路径=dst_file, 冲突处理="跳过")
+                continue
+            conflict = "覆盖" if existed else "无冲突"
+            if dry_run:
+                rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                    最近距离=round(dist,1), 期望侧别=expected, 实际侧别=actual,
+                    分类结果="精细化", 目标路径=dst_file, 冲突处理=conflict)
+                continue
+            os.makedirs(dst, exist_ok=True)
             shutil.copy(img_path,dst)
             print(f"[精细化] {fn} → {dst}")
             rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,

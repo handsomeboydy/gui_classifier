@@ -44,6 +44,14 @@ class ResultRecorder:
         self._started = time.time()
         self._records = {}
         self._last_csv_path = None
+        self.skip_ir = None
+
+    def set_skip_ir(self, names):
+        """保存自主通道阶段计算出的跳过列表（供仅分析模式传递）。"""
+        self.skip_ir = set(names)
+
+    def get_skip_ir(self):
+        return self.skip_ir
 
     def _key(self, src_dir, filename):
         return (src_dir, filename)

@@ -5,6 +5,7 @@ import pandas as pd
 import exifread
 from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime
+from preflight import is_supported_file, iter_src_files
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -55,18 +56,23 @@ def load_ledger(path, line_name):
     df['tower'] = df['tower'].astype(str)
     return df[['tower','经度','纬度']]
 
-def classify_channels(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
+def classify_channels(ledger_file, src_folder, output_root, line_name, threshold, recorder=None,
+                      conflict_policy="覆盖", dry_run=False):
     """
     只输出“通道照片”，并生成 skip_ir 列表供其他脚本使用。
 
     recorder: 可选 ResultRecorder，记录通道照片的最终结果；不影响分类结果。
+    conflict_policy: "覆盖" 或 "跳过"，同名文件冲突策略（默认覆盖）。
+    dry_run: True 表示仅分析，不写 skip_ir、不创建输出目录、不复制照片。
     """
     # 1. 加载台账与照片 metadata
     ledger = load_ledger(ledger_file, line_name)
     towers = ledger['tower'].tolist()
 
     imgs = []
-    for p in glob.glob(os.path.join(src_folder, '*.*')):
+    for p in iter_src_files(src_folder):
+        if not is_supported_file(p):
+            continue
         try:
             lat, lon, ts = get_exif(p)
         except Exception:
@@ -125,20 +131,55 @@ def classify_channels(ledger_file, src_folder, output_root, line_name, threshold
             bn = os.path.basename(img['path'])
             if '_V_' in bn: skip_ir.add(bn.replace('_V_','_T_'))
 
-    os.makedirs(os.path.join(output_root, line_name), exist_ok=True)
     skip_file = os.path.join(output_root, line_name, 'skip_ir.txt')
-    with open(skip_file,'w') as f:
-        for name in skip_ir: f.write(name + '\n')
+    if dry_run:
+        if recorder is not None:
+            recorder.set_skip_ir(skip_ir)
+    else:
+        os.makedirs(os.path.join(output_root, line_name), exist_ok=True)
+        with open(skip_file,'w') as f:
+            for name in skip_ir: f.write(name + '\n')
 
     # 6. 仅输出通道照片
     base = os.path.join(output_root, line_name, '通道')
-    os.makedirs(base, exist_ok=True)
+    if not dry_run:
+        os.makedirs(base, exist_ok=True)
     for img in candidates:
         if img.get('cat') == '通道' and img.get('tower'):
             dst_dir = os.path.join(base, img['tower'])
-            os.makedirs(dst_dir, exist_ok=True)
             dst_file = os.path.join(dst_dir, os.path.basename(img['path']))
-            conflict = "覆盖" if os.path.exists(dst_file) else "无冲突"
+            existed = os.path.exists(dst_file)
+            if existed and conflict_policy == "跳过":
+                print(f"[跳过，输出冲突] {img['path']} → {dst_file}")
+                if recorder is not None:
+                    recorder.record(
+                        src_folder,
+                        os.path.basename(img['path']),
+                        源文件完整路径=img['path'],
+                        EXIF状态="正常",
+                        分类结果="跳过",
+                        结果原因="输出冲突",
+                        目标路径=dst_file,
+                        冲突处理="跳过",
+                    )
+                continue
+            conflict = "覆盖" if existed else "无冲突"
+            if dry_run:
+                if recorder is not None:
+                    recorder.record(
+                        src_folder,
+                        os.path.basename(img['path']),
+                        源文件完整路径=img['path'],
+                        EXIF状态="正常",
+                        纬度=img['lat'],
+                        经度=img['lon'],
+                        最近杆塔=img['tower'],
+                        分类结果="通道",
+                        目标路径=dst_file,
+                        冲突处理=conflict,
+                    )
+                continue
+            os.makedirs(dst_dir, exist_ok=True)
             shutil.copy(img['path'], dst_dir)
             print(f"[通道] {img['path']} → {dst_dir}")
             if recorder is not None:

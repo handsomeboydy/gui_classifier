@@ -19,6 +19,7 @@ import classify_channels
 APP_VERSION = "1.0.1"  # 必须与当前 Release tag 对齐
 import updater_github
 from reporting import ResultRecorder
+from preflight import LEVEL_ERROR, LEVEL_WARNING, preflight
 
 
 # Config file for persisting ledger library path（保持你原来的用法）
@@ -166,14 +167,23 @@ class ClassifierGUI(tk.Tk):
         for c in range(7):
             btn_frame2.grid_columnconfigure(c, weight=1)
 
-        start_btn = tk.Button(
+        self.start_btn = tk.Button(
             btn_frame2,
             text="开始分类",
-            command=self._start_classify,
+            command=lambda: self._start_classify(False),
             bg="#4CAF50",
             fg="white"
         )
-        start_btn.grid(row=0, column=1, sticky="we")
+        self.start_btn.grid(row=0, column=1, sticky="we")
+
+        self.analyze_btn = tk.Button(
+            btn_frame2,
+            text="仅分析（试运行）",
+            command=lambda: self._start_classify(True),
+            bg="#607D8B",
+            fg="white"
+        )
+        self.analyze_btn.grid(row=0, column=2, sticky="we")
 
 
         update_btn = tk.Button(
@@ -294,14 +304,33 @@ class ClassifierGUI(tk.Tk):
             self.out_var.set(path)
             self._out_auto_set = True
 
-    def _start_classify(self):
+    def _start_classify(self, analyze_only=False):
+        if getattr(self, "_busy", False):
+            return
+        self._busy = True
+        self.start_btn.configure(state="disabled")
+        self.analyze_btn.configure(state="disabled")
         self._save_config()
         self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
         self.log_text.configure(state='disabled')
-        threading.Thread(target=self._do_classify, daemon=True).start()
+        threading.Thread(target=self._do_classify, args=(analyze_only,), daemon=True).start()
 
-    def _do_classify(self):
+    def _finish_run(self):
+        self._busy = False
+        self.start_btn.configure(state="normal")
+        self.analyze_btn.configure(state="normal")
+
+    def _do_classify(self, analyze_only=False):
+        sys_stdout = sys.stdout
+        sys.stderr = sys.stdout = redirect_stdout_to_widget(self.log_text)
+        try:
+            self._run_classify(analyze_only)
+        finally:
+            sys.stdout = sys.stderr = sys_stdout
+            self.after(0, self._finish_run)
+
+    def _run_classify(self, analyze_only=False):
         ledger_lib = self.ledger_lib_var.get().strip()
         out = self.out_var.get().strip()
         line = self.line_var.get().strip()
@@ -320,12 +349,34 @@ class ClassifierGUI(tk.Tk):
             messagebox.showerror("参数错误", f"未找到台账文件: {ledger_file}")
             return
 
-        recorder = ResultRecorder()
-        sys_stdout = sys.stdout
-        sys.stderr = sys.stdout = redirect_stdout_to_widget(self.log_text)
+        mode = self.mode_var.get()
+        pre = preflight(ledger_file, self.src_dirs, out, line, thresh, mode)
+        print("\n===== 预检结果 =====")
+        for issue in pre.rows():
+            print(f"[{issue['级别']}] {issue['类别']}: {issue['说明']}")
+        if pre.has_errors():
+            errors = [i['说明'] for i in pre.rows() if i['级别'] == LEVEL_ERROR]
+            messagebox.showerror("预检未通过", "\n".join(errors))
+            return
+        warnings = [i['说明'] for i in pre.rows() if i['级别'] == LEVEL_WARNING]
+        if warnings:
+            ok = messagebox.askyesno("预检警告", "存在以下警告：\n\n" + "\n".join(warnings) + "\n\n是否继续？")
+            if not ok:
+                return
 
+        conflict_policy = "覆盖"
+        if not analyze_only:
+            choice = messagebox.askyesnocancel(
+                "冲突处理",
+                "目标路径存在同名文件时如何处理？\n\n是(Y)=覆盖（默认）\n否(N)=跳过\n取消=放弃本次运行"
+            )
+            if choice is None:
+                return
+            conflict_policy = "覆盖" if choice else "跳过"
+
+        recorder = ResultRecorder()
         try:
-            if self.mode_var.get() == "manual":
+            if mode == "manual":
                 for src_folder in self.src_dirs:
                     print(f"\n====== 开始处理源文件夹: {src_folder} ======\n")
                     classify.classify(
@@ -334,7 +385,9 @@ class ClassifierGUI(tk.Tk):
                         output_root=out,
                         line_name=line,
                         threshold=thresh,
-                        recorder=recorder
+                        recorder=recorder,
+                        conflict_policy=conflict_policy,
+                        dry_run=analyze_only
                     )
             else:
                 for src_folder in self.src_dirs:
@@ -346,7 +399,9 @@ class ClassifierGUI(tk.Tk):
                         output_root=out,
                         line_name=line,
                         threshold=thresh,
-                        recorder=recorder
+                        recorder=recorder,
+                        conflict_policy=conflict_policy,
+                        dry_run=analyze_only
                     )
                     print("通道分类完成。\n")
                     classify_autonomous.classify_autonomous(
@@ -355,19 +410,24 @@ class ClassifierGUI(tk.Tk):
                         output_root=out,
                         line_name=line,
                         threshold=thresh,
-                        recorder=recorder
+                        recorder=recorder,
+                        conflict_policy=conflict_policy,
+                        dry_run=analyze_only
                     )
                 self._cleanup_skip_ir(out, line)
             csv_path = recorder.write_csv(out, line, sanitize=self.sanitize_var.get())
             summary = recorder.summary()
-            print("\n总体分类完成。")
+            print("\n总体处理完成。")
             print(f"结果清单位置: {csv_path}")
             print(f"扫描文件总数: {summary['总数']}")
             for result, count in summary["分类结果"].items():
                 print(f"  {result}: {count}")
             for reason, count in summary["结果原因"].items():
                 print(f"  原因[{reason}]: {count}")
-            messagebox.showinfo("完成", f"照片分类已完成\n清单位置:\n{csv_path}")
+            if analyze_only:
+                messagebox.showinfo("仅分析完成", f"仅分析完成（未复制任何照片）\n清单位置:\n{csv_path}")
+            else:
+                messagebox.showinfo("完成", f"照片分类已完成\n清单位置:\n{csv_path}")
         except Exception as e:
             try:
                 recorder.write_csv(out, line, sanitize=self.sanitize_var.get())
@@ -375,8 +435,6 @@ class ClassifierGUI(tk.Tk):
                 pass
             print(f"运行出错: {e}\n")
             messagebox.showerror("运行出错", str(e))
-        finally:
-            sys.stdout = sys.stderr = sys_stdout
 
     def _cleanup_skip_ir(self, output_root: str, line_name: str):
         """自主分类全部完成后删除两个阶段之间的临时文件。"""

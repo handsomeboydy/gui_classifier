@@ -7,6 +7,7 @@ import exifread
 from math import radians, sin, cos, sqrt, atan2
 
 from side_parser import get_expected_side_for_tower
+from preflight import is_supported_file, iter_src_files
 
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -109,19 +110,23 @@ def determine_side(prev_coord, curr_coord, next_coord, img_coord):
     return None
 
 
-def classify(ledger_file, src_folder, output_root, line_name, threshold, recorder=None):
+def classify(ledger_file, src_folder, output_root, line_name, threshold, recorder=None,
+             conflict_policy="覆盖", dry_run=False):
     """
     对手动飞行的照片进行分类（支持部分同塔分段侧别配置）。
 
     recorder: 可选 ResultRecorder，用于记录一文件一结果；不影响分类结果。
+    conflict_policy: "覆盖" 或 "跳过"，同名文件冲突策略（默认覆盖）。
+    dry_run: True 表示仅分析，不创建输出目录、不复制照片。
     """
     # 1. 加载台账与侧别配置
     ledger = load_ledger(ledger_file)
     raw_side_str = load_double_tower_side(ledger_file, line_name)
 
-    # 2. 准备输出目录
-    for sub in ("精细化", "红外照片", "通道"):
-        os.makedirs(os.path.join(output_root, line_name, sub), exist_ok=True)
+    # 2. 准备输出目录（仅分析模式不创建）
+    if not dry_run:
+        for sub in ("精细化", "红外照片", "通道"):
+            os.makedirs(os.path.join(output_root, line_name, sub), exist_ok=True)
 
     # 3. 对台账按杆塔编号排序，生成序列
     ledger_sorted = ledger.copy()
@@ -130,12 +135,17 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold, recorde
     towers_seq = ledger_sorted['杆塔编号'].tolist()
 
     # 4. 遍历照片
-    for img_path in glob.glob(os.path.join(src_folder, '*.*')):
+    for img_path in iter_src_files(src_folder):
         filename = os.path.basename(img_path)
 
         def rec(**fields):
             if recorder is not None:
                 recorder.record(src_folder, filename, 源文件完整路径=img_path, **fields)
+
+        if not is_supported_file(img_path):
+            print(f"[格式不支持] {img_path}")
+            rec(EXIF状态="格式不支持", 分类结果="跳过", 结果原因="格式不支持")
+            continue
 
         try:
             lat, lon = get_image_gps(img_path)
@@ -209,9 +219,23 @@ def classify(ledger_file, src_folder, output_root, line_name, threshold, recorde
         name = os.path.basename(img_path)
         category = "红外照片" if '_T' in name else "精细化"
         dest = os.path.join(output_root, line_name, category, tower)
-        os.makedirs(dest, exist_ok=True)
         dest_file = os.path.join(dest, name)
-        conflict = "覆盖" if os.path.exists(dest_file) else "无冲突"
+        existed = os.path.exists(dest_file)
+        if existed and conflict_policy == "跳过":
+            print(f"[跳过，输出冲突] {img_path} → {dest_file}")
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(closest_dist, 1), 期望侧别=expected_side,
+                实际侧别=actual_side, 分类结果="跳过", 结果原因="输出冲突",
+                目标路径=dest_file, 冲突处理="跳过")
+            continue
+        conflict = "覆盖" if existed else "无冲突"
+        if dry_run:
+            rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
+                最近距离=round(closest_dist, 1), 期望侧别=expected_side,
+                实际侧别=actual_side, 分类结果=category, 目标路径=dest_file,
+                冲突处理=conflict)
+            continue
+        os.makedirs(dest, exist_ok=True)
         shutil.copy(img_path, dest)
         print(f"[已分类] {img_path} → {dest}")
         rec(EXIF状态="正常", 纬度=lat, 经度=lon, 最近杆塔=tower,
