@@ -1,0 +1,30 @@
+version: 0.0.5
+type: plugin
+author: internal-kml-ledger
+name: kml_ledger_converter
+label:
+  en_US: KML Ledger Converter
+  zh_Hans: KML 经纬度台账转换器
+description:
+  en_US: Deterministically convert one KML tower file to an XLSX ledger.
+  zh_Hans: 将单个 KML 杆塔文件按规则转换为可供分图软件使用的 XLSX 经纬度台账。
+created_at: "2026-08-17T00:00:00Z"
+icon: icon.svg
+resource:
+  memory: 268435456
+  permission:
+    storage:
+      enabled: true
+      size: 1048576
+plugins:
+  tools:
+    - provider/kml_ledger.yaml
+meta:
+  version: 0.0.1
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main

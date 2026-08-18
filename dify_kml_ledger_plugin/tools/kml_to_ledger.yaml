@@ -1,0 +1,118 @@
+identity:
+  name: kml_to_ledger
+  author: internal-kml-ledger
+  icon: icon.svg
+  label:
+    en_US: KML to Ledger
+    zh_Hans: KML 转经纬度台账
+description:
+  human:
+    en_US: Convert one KML tower file to an XLSX ledger with columns line name, tower number, longitude and latitude.
+    zh_Hans: 将一个 KML 杆塔文件转换为包含线路名称、杆塔编号、经度和纬度的 XLSX 经纬度台账。
+  llm: Deterministically convert the uploaded KML file to an XLSX tower ledger. Do not infer or rewrite coordinates.
+parameters:
+  - name: file
+    type: file
+    required: true
+    label:
+      en_US: KML file
+      zh_Hans: KML 文件
+    human_description:
+      en_US: One .kml file containing tower Point placemarks.
+      zh_Hans: 一个包含杆塔 Point Placemark 的 .kml 文件。
+    llm_description: The single KML file to convert.
+    form: form
+  - name: voltage_level
+    type: string
+    required: false
+    label:
+      en_US: Voltage level override
+      zh_Hans: 电压等级（手动覆盖）
+    human_description:
+      en_US: Optional override, for example 220.
+      zh_Hans: 异常文件名无法识别时填写，例如220。
+    llm_description: Optional voltage level override.
+    form: form
+  - name: circuit_type
+    type: string
+    required: false
+    label:
+      en_US: Circuit type override
+      zh_Hans: 线路类型（手动覆盖）
+    human_description:
+      en_US: 'Optional value: single or double.'
+      zh_Hans: 可填写单回或双回。
+    llm_description: Optional single/double circuit override.
+    form: form
+  - name: line_name_1
+    type: string
+    required: false
+    label:
+      en_US: Line 1 name override
+      zh_Hans: 线路1名称（手动覆盖）
+    human_description:
+      en_US: Optional normalized line name without voltage.
+      zh_Hans: 不带电压等级的线路名称，例如砚利甲线。
+    llm_description: Optional normalized line 1 name.
+    form: form
+  - name: line_name_2
+    type: string
+    required: false
+    label:
+      en_US: Line 2 name override
+      zh_Hans: 线路2名称（手动覆盖）
+    human_description:
+      en_US: Required for a double-circuit override.
+      zh_Hans: 双回线路手动补录时填写，例如砚利乙线。
+    llm_description: Optional normalized line 2 name.
+    form: form
+output_schema:
+  type: object
+  properties:
+    status:
+      type: string
+      description: succeeded or manual_required.
+    manual_required:
+      type: boolean
+      description: Whether the desktop client must collect overrides.
+    manual_reason:
+      type: string
+      description: Reason for manual input.
+    file_names:
+      type: array
+      items:
+        type: string
+      description: Generated XLSX filenames.
+    line_names:
+      type: array
+      items:
+        type: string
+      description: Normalized output line names.
+    line_full_name:
+      type: string
+      description: Normalized source line full name.
+    voltage_level:
+      type: string
+      description: Parsed or manually supplied voltage level.
+    circuit_type:
+      type: string
+      description: single or double circuit.
+    tower_count:
+      type: integer
+      description: Number of tower rows generated.
+    warnings:
+      type: array
+      items:
+        type: string
+      description: Non-fatal conversion warnings.
+    sha256:
+      type: string
+      description: SHA-256 of the generated XLSX bytes.
+    sha256s:
+      type: array
+      items:
+        type: string
+      description: SHA-256 values in output file order.
+extra:
+  python:
+    source: tools/kml_to_ledger.py

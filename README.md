@@ -112,6 +112,18 @@ python gui_classifier.py
 
 > GUI 会在当前工作目录生成 `gui_classifier_config.json`，用于记忆“台账库路径”。
 
+### 从 Dify 获取经纬度台账
+
+在菜单栏选择“台账服务 → 从 KML 获取经纬度台账”，选择一个 `.kml` 文件后输入 Dify API Base URL 和 Workflow API Key。当前版本只保存 Base URL，API Key 仅在本次进程内存中使用，不写入配置文件。标准甲乙双回KML会返回两本台账；异常名称由桌面端弹窗补录。
+
+工作流应接收 `kml_file` 以及可选的 `voltage_level`、`circuit_type`、`line_name_1`、`line_name_2`，并返回包含 `files`（`array[file]`）的 XLSX 输出。项目内提供：
+
+- `dify_kml_client.py`：文件上传、Workflow 调用、结果下载与 XLSX 预检。
+- `dify_kml_ledger_plugin/`：私有 Dify 工具插件骨架。
+- `dify_kml_ledger_workflow.template.yml`：DSL `version: 0.5.0` 工作流模板，安装插件后需替换插件标识并从目标环境导出确认版。
+
+KML 转换失败或 Dify 不可用时，不影响用户继续使用本地已有台账完成分图。
+
 ---
 
 ## 使用方法（命令行）

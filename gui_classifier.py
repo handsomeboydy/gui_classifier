@@ -6,10 +6,13 @@ dispatch_mode_or_continue()
 import os
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 import tkinter.scrolledtext as scrolledtext
 import json
+import platform
 import subprocess  # 用于启动拓展工具（保留）
+import tempfile
+import uuid
 import extension   # 保留：帮助 pyinstaller 收集模块
 
 import classify
@@ -20,6 +23,7 @@ APP_VERSION = "1.1.0"  # 必须与当前 Release tag 对齐
 import updater_github
 from reporting import ResultRecorder
 from preflight import LEVEL_ERROR, LEVEL_WARNING, preflight
+from dify_kml_client import DifyApiError, DifyKmlClient, DifyLedgerBatchResult
 
 
 # Config file for persisting ledger library path（保持你原来的用法）
@@ -95,6 +99,10 @@ class ClassifierGUI(tk.Tk):
 
     def _build_menu(self):
         menubar = tk.Menu(self)
+
+        service_menu = tk.Menu(menubar, tearoff=0)
+        service_menu.add_command(label="从 KML 获取经纬度台账", command=self._get_kml_ledger)
+        menubar.add_cascade(label="台账服务", menu=service_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="检查更新", command=lambda: check_update_ui(self, silent=False))
@@ -221,17 +229,247 @@ class ClassifierGUI(tk.Tk):
             path = cfg.get('ledger_lib_path', '')
             if path and os.path.isdir(path):
                 self.ledger_lib_var.set(path)
+            self.dify_api_base_url = str(cfg.get('dify_api_base_url', '') or '')
         except Exception:
-            pass
+            self.dify_api_base_url = ''
 
     def _save_config(self):
         try:
-            cfg = {'ledger_lib_path': self.ledger_lib_var.get()}
+            cfg = {
+                'ledger_lib_path': self.ledger_lib_var.get(),
+                # API Key deliberately never enters this file.
+                'dify_api_base_url': getattr(self, 'dify_api_base_url', ''),
+            }
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f)
             print(f"已保存台账库路径至配置文件: {CONFIG_FILE}\n")
         except Exception as e:
             print(f"保存配置失败: {e}\n")
+
+    def _get_kml_ledger(self):
+        """Upload one KML to Dify and save the validated XLSX into the ledger library."""
+        if getattr(self, "_dify_busy", False) or getattr(self, "_busy", False):
+            messagebox.showinfo("任务进行中", "请等待当前任务完成后再获取台账")
+            return
+        ledger_lib = self.ledger_lib_var.get().strip()
+        if not ledger_lib or not os.path.isdir(ledger_lib):
+            messagebox.showwarning("台账库未设置", "请先选择有效的台账库文件夹")
+            return
+        kml_path = filedialog.askopenfilename(
+            title="选择 KML 文件",
+            filetypes=[("KML 文件", "*.kml"), ("所有文件", "*.*")],
+        )
+        if not kml_path:
+            return
+
+        default_url = getattr(self, "dify_api_base_url", "") or os.environ.get("DIFY_API_BASE_URL", "")
+        api_url = simpledialog.askstring(
+            "Dify 服务地址",
+            "请输入 Dify API Base URL（例如 https://example.com/v1）:",
+            initialvalue=default_url,
+            parent=self,
+        )
+        if not api_url:
+            return
+        api_key = simpledialog.askstring(
+            "Dify Workflow API Key",
+            "请输入 Workflow API Key（仅本次使用，不写入配置文件）:",
+            show="*",
+            parent=self,
+        )
+        if not api_key:
+            return
+        self.dify_api_base_url = api_url.strip().rstrip("/")
+        self._save_config()
+        self._dify_busy = True
+        self._append_log("\n====== 开始从 Dify 获取经纬度台账 ======\n")
+        threading.Thread(
+            target=self._do_get_kml_ledger,
+            args=(kml_path, api_key),
+            daemon=True,
+        ).start()
+
+    def _append_log(self, text):
+        def update():
+            self.log_text.configure(state='normal')
+            self.log_text.insert('end', text)
+            self.log_text.see('end')
+            self.log_text.configure(state='disabled')
+        self.after(0, update)
+
+    def _do_get_kml_ledger(self, kml_path, api_key, overrides=None, upload_file_id=None):
+        try:
+            user_id = f"gui-{platform.node() or 'device'}-{uuid.getnode():x}"
+            client = DifyKmlClient(self.dify_api_base_url, api_key, user_id)
+            if upload_file_id:
+                self._append_log(f"使用已上传文件重试：{os.path.basename(kml_path)}\n")
+            else:
+                self._append_log(f"上传 KML: {os.path.basename(kml_path)}\n")
+            result = client.generate_ledgers(kml_path, overrides=overrides, upload_file_id=upload_file_id)
+            if result.manual_required:
+                if overrides:
+                    self._append_log(f"人工补录后仍无法转换：{result.manual_reason}\n")
+                    self.after(0, lambda r=result: messagebox.showerror("线路信息不完整", r.manual_reason))
+                    self.after(0, self._finish_dify_task)
+                else:
+                    self.after(0, lambda r=result, c=client: self._prompt_kml_overrides(kml_path, api_key, c, r))
+                return
+            names = "、".join(result.line_names)
+            self._append_log(f"Workflow 完成：{names}，输出 {len(result.artifacts)} 本台账\n")
+            self.after(0, lambda r=result: self._finish_get_kml_ledger(r))
+        except (DifyApiError, ValueError, OSError) as exc:
+            self._append_log(f"获取台账失败：{exc}\n")
+            self.after(0, lambda e=exc: messagebox.showerror("获取台账失败", str(e)))
+            self.after(0, self._finish_dify_task)
+        except Exception as exc:
+            self._append_log(f"获取台账发生未预期错误：{exc}\n")
+            self.after(0, lambda e=exc: messagebox.showerror("获取台账失败", str(e)))
+            self.after(0, self._finish_dify_task)
+
+    def _prompt_kml_overrides(self, kml_path, api_key, client, result):
+        dialog = tk.Toplevel(self)
+        dialog.title("补充线路信息")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        tk.Label(dialog, text=f"文件：{os.path.basename(kml_path)}", anchor="w").grid(
+            row=0, column=0, columnspan=2, padx=12, pady=(12, 6), sticky="we"
+        )
+        tk.Label(dialog, text=f"自动识别提示：{result.manual_reason or '需要人工确认'}", fg="#A15C00", anchor="w").grid(
+            row=1, column=0, columnspan=2, padx=12, pady=4, sticky="we"
+        )
+
+        voltage_var = tk.StringVar(value=result.voltage_level or "")
+        line1_default = result.line_names[0] if result.line_names else ""
+        line2_default = result.line_names[1] if len(result.line_names) > 1 else ""
+        line1_var = tk.StringVar(value=line1_default)
+        line2_var = tk.StringVar(value=line2_default)
+        circuit_var = tk.StringVar(value=result.circuit_type or ("双回" if line2_default else "单回"))
+
+        fields = [
+            ("电压等级(kV)", voltage_var),
+            ("线路1名称", line1_var),
+            ("线路2名称（双回填写）", line2_var),
+        ]
+        for row, (label, variable) in enumerate(fields, start=2):
+            tk.Label(dialog, text=label).grid(row=row, column=0, padx=12, pady=5, sticky="e")
+            tk.Entry(dialog, textvariable=variable, width=32).grid(row=row, column=1, padx=12, pady=5, sticky="we")
+        tk.Label(dialog, text="线路类型").grid(row=5, column=0, padx=12, pady=5, sticky="e")
+        tk.OptionMenu(dialog, circuit_var, "单回", "双回").grid(row=5, column=1, padx=12, pady=5, sticky="w")
+
+        button_frame = tk.Frame(dialog)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=(8, 12))
+
+        def cancel():
+            dialog.destroy()
+            self._finish_dify_task()
+
+        def submit():
+            voltage = voltage_var.get().strip()
+            line1 = line1_var.get().strip()
+            line2 = line2_var.get().strip()
+            circuit = circuit_var.get().strip()
+            if not voltage or not line1:
+                messagebox.showwarning("信息不完整", "请填写电压等级和线路1名称", parent=dialog)
+                return
+            if circuit == "双回" and not line2:
+                messagebox.showwarning("信息不完整", "双回线路必须填写线路2名称", parent=dialog)
+                return
+            dialog.destroy()
+            overrides = {
+                "voltage_level": voltage,
+                "circuit_type": circuit,
+                "line_name_1": line1,
+                "line_name_2": line2 if circuit == "双回" else "",
+            }
+            threading.Thread(
+                target=self._do_get_kml_ledger,
+                args=(kml_path, api_key, overrides, result.upload_file_id),
+                daemon=True,
+            ).start()
+
+        tk.Button(button_frame, text="取消", width=10, command=cancel).pack(side="right", padx=5)
+        tk.Button(button_frame, text="继续转换", width=10, command=submit).pack(side="right", padx=5)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        dialog.columnconfigure(1, weight=1)
+
+    def _finish_get_kml_ledger(self, result: DifyLedgerBatchResult):
+        try:
+            target_dir = self.ledger_lib_var.get().strip()
+            if not result.artifacts:
+                raise DifyApiError("OUTPUT_FILE_MISSING", "Workflow没有返回台账文件")
+
+            targets = []
+            existing = []
+            for artifact in result.artifacts:
+                safe_name = os.path.basename(artifact.file_name)
+                if not safe_name.lower().endswith(".xlsx"):
+                    raise DifyApiError("OUTPUT_FILE_INVALID", f"输出文件名不是XLSX：{safe_name}")
+                target_path = os.path.join(target_dir, safe_name)
+                targets.append((target_path, artifact))
+                if os.path.exists(target_path):
+                    existing.append(target_path)
+
+            if existing:
+                overwrite = messagebox.askyesno(
+                    "台账已存在",
+                    "以下目标文件已存在：\n\n" + "\n".join(existing) + "\n\n是否全部覆盖？覆盖前会生成 .bak 备份。",
+                    parent=self,
+                )
+                if not overwrite:
+                    new_targets = []
+                    for target_path, artifact in targets:
+                        if os.path.exists(target_path):
+                            target_path = filedialog.asksaveasfilename(
+                                title="另存为经纬度台账",
+                                initialdir=target_dir,
+                                initialfile=os.path.basename(target_path),
+                                defaultextension=".xlsx",
+                                filetypes=[("Excel 文件", "*.xlsx")],
+                            )
+                            if not target_path:
+                                self._finish_dify_task()
+                                return
+                        new_targets.append((target_path, artifact))
+                    targets = new_targets
+
+            temp_files = []
+            try:
+                for target_path, artifact in targets:
+                    directory = os.path.dirname(target_path)
+                    os.makedirs(directory, exist_ok=True)
+                    fd, temp_path = tempfile.mkstemp(prefix=".dify_ledger_", suffix=".tmp", dir=directory)
+                    temp_files.append((temp_path, target_path, artifact))
+                    with os.fdopen(fd, "wb") as temp_file:
+                        temp_file.write(artifact.xlsx_bytes)
+                        temp_file.flush()
+                        os.fsync(temp_file.fileno())
+                for temp_path, target_path, _artifact in temp_files:
+                    if os.path.isfile(target_path):
+                        backup = target_path + ".bak"
+                        with open(target_path, "rb") as source, open(backup, "wb") as destination:
+                            destination.write(source.read())
+                    os.replace(temp_path, target_path)
+            finally:
+                for temp_path, _target_path, _artifact in temp_files:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+
+            if result.line_names:
+                self.line_var.set(result.line_names[0])
+            warning_text = "\n".join(result.warnings) if result.warnings else "无警告"
+            saved_text = "\n".join(target_path for target_path, _artifact in targets)
+            tower_text = "；".join(f"{a.line_name}: {a.tower_count}基" for a in result.artifacts)
+            self._append_log(f"台账已保存：\n{saved_text}\n警告：{warning_text}\n")
+            messagebox.showinfo("获取台账完成", f"已保存：\n{saved_text}\n\n杆塔数：{tower_text}\n警告：{warning_text}", parent=self)
+        except Exception as exc:
+            self._append_log(f"保存台账失败：{exc}\n")
+            messagebox.showerror("保存台账失败", str(exc), parent=self)
+        finally:
+            self._finish_dify_task()
+
+    def _finish_dify_task(self):
+        self._dify_busy = False
 
     def _show_line_menu(self):
         """弹出二级菜单：一级为指定顺序的文件夹，二级为该目录下.xlsx文件（即使为空也显示文件夹）"""

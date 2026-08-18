@@ -1,0 +1,377 @@
+# Dify Workflow DSL 0.5.0. The plugin identifier below is bound to the
+# packaged private plugin currently in this project. If Dify generated a
+# different hash when installing it, replace only the @hash suffix with the
+# identifier shown by Dify in the installed plugin or in an exported app.
+app:
+  description: Deterministically convert one KML tower file to an XLSX ledger.
+  icon: 📍
+  icon_background: '#DBEAFE'
+  mode: workflow
+  name: kml_to_ledger
+  use_icon_as_answer_icon: false
+dependencies:
+  - current_identifier: null
+    type: package
+    value:
+      plugin_unique_identifier: 'internal-kml-ledger/kml_ledger_converter:0.0.5@F6012D47BE4BB84AFA4E5C8FE28C144780B0019F7CE70191536B24F9AD88886E'
+      version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+        - .kml
+      allowed_file_types:
+        - custom
+      allowed_file_upload_methods:
+        - local_file
+      enabled: true
+      fileUploadConfig:
+        file_size_limit: 15
+        workflow_file_upload_limit: 1
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+  graph:
+    edges:
+      - data:
+          isInIteration: false
+          isInLoop: false
+          sourceType: start
+          targetType: tool
+        id: start-source-tool-target
+        source: start
+        sourceHandle: source
+        target: tool
+        targetHandle: target
+        type: custom
+        zIndex: 0
+      - data:
+          isInIteration: false
+          isInLoop: false
+          sourceType: tool
+          targetType: end
+        id: tool-source-end-target
+        source: tool
+        sourceHandle: source
+        target: end
+        targetHandle: target
+        type: custom
+        zIndex: 0
+    nodes:
+      - data:
+          selected: false
+          title: 用户输入
+          type: start
+          variables:
+            - allowed_file_extensions:
+                - .kml
+              allowed_file_types:
+                - custom
+              allowed_file_upload_methods:
+                - local_file
+              default: ''
+              hint: 请选择一个 KML 杆塔文件
+              label: KML 文件
+              max_length: 1
+              options: []
+              placeholder: ''
+              required: true
+              type: file
+              variable: kml_file
+            - default: ''
+              hint: 异常文件名无法识别时填写，例如220
+              label: 电压等级（手动覆盖）
+              max_length: 32
+              options: []
+              placeholder: ''
+              required: false
+              type: text-input
+              variable: voltage_level
+            - default: ''
+              hint: 可填写单回或双回
+              label: 线路类型（手动覆盖）
+              max_length: 16
+              options: []
+              placeholder: ''
+              required: false
+              type: text-input
+              variable: circuit_type
+            - default: ''
+              hint: 不带电压等级的线路1名称
+              label: 线路1名称（手动覆盖）
+              max_length: 128
+              options: []
+              placeholder: ''
+              required: false
+              type: text-input
+              variable: line_name_1
+            - default: ''
+              hint: 双回线路填写线路2名称
+              label: 线路2名称（手动覆盖）
+              max_length: 128
+              options: []
+              placeholder: ''
+              required: false
+              type: text-input
+              variable: line_name_2
+        height: 120
+        id: start
+        position:
+          x: 80
+          y: 282
+        positionAbsolute:
+          x: 80
+          y: 282
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        type: custom
+        width: 242
+      - data:
+          is_team_authorization: true
+          paramSchemas:
+            - auto_generate: null
+              default: null
+              form: form
+              human_description:
+                en_US: One KML file containing tower Point placemarks.
+                zh_Hans: 一个包含杆塔 Point Placemark 的 KML 文件。
+              label:
+                en_US: KML file
+                zh_Hans: KML 文件
+              llm_description: The single KML file to convert.
+              max: null
+              min: null
+              name: file
+              options: []
+              placeholder: null
+              precision: null
+              required: true
+              scope: null
+              template: null
+              type: file
+            - auto_generate: null
+              default: null
+              form: form
+              human_description:
+                en_US: Optional voltage level override.
+                zh_Hans: 异常文件名无法识别时填写电压等级。
+              label:
+                en_US: Voltage level override
+                zh_Hans: 电压等级（手动覆盖）
+              llm_description: Optional voltage level override.
+              max: null
+              min: null
+              name: voltage_level
+              options: []
+              placeholder: null
+              precision: null
+              required: false
+              scope: null
+              template: null
+              type: string
+            - auto_generate: null
+              default: null
+              form: form
+              human_description:
+                en_US: Optional single or double circuit override.
+                zh_Hans: 可填写单回或双回。
+              label:
+                en_US: Circuit type override
+                zh_Hans: 线路类型（手动覆盖）
+              llm_description: Optional single or double circuit override.
+              max: null
+              min: null
+              name: circuit_type
+              options: []
+              placeholder: null
+              precision: null
+              required: false
+              scope: null
+              template: null
+              type: string
+            - auto_generate: null
+              default: null
+              form: form
+              human_description:
+                en_US: Optional normalized line 1 name.
+                zh_Hans: 不带电压等级的线路1名称。
+              label:
+                en_US: Line 1 name override
+                zh_Hans: 线路1名称（手动覆盖）
+              llm_description: Optional normalized line 1 name.
+              max: null
+              min: null
+              name: line_name_1
+              options: []
+              placeholder: null
+              precision: null
+              required: false
+              scope: null
+              template: null
+              type: string
+            - auto_generate: null
+              default: null
+              form: form
+              human_description:
+                en_US: Optional normalized line 2 name.
+                zh_Hans: 双回线路的线路2名称。
+              label:
+                en_US: Line 2 name override
+                zh_Hans: 线路2名称（手动覆盖）
+              llm_description: Optional normalized line 2 name.
+              max: null
+              min: null
+              name: line_name_2
+              options: []
+              placeholder: null
+              precision: null
+              required: false
+              scope: null
+              template: null
+              type: string
+          plugin_id: internal-kml-ledger/kml_ledger_converter
+          plugin_unique_identifier: internal-kml-ledger/kml_ledger_converter:0.0.5@F6012D47BE4BB84AFA4E5C8FE28C144780B0019F7CE70191536B24F9AD88886E
+          provider_id: internal-kml-ledger/kml_ledger_converter/kml_ledger
+          provider_name: internal-kml-ledger/kml_ledger_converter/kml_ledger
+          provider_type: builtin
+          selected: false
+          title: KML 转经纬度台账
+          tool_configurations:
+            file:
+              type: variable
+              value:
+                - start
+                - kml_file
+            voltage_level:
+              type: variable
+              value:
+                - start
+                - voltage_level
+            circuit_type:
+              type: variable
+              value:
+                - start
+                - circuit_type
+            line_name_1:
+              type: variable
+              value:
+                - start
+                - line_name_1
+            line_name_2:
+              type: variable
+              value:
+                - start
+                - line_name_2
+          tool_description: 将 KML 杆塔点转换为可被分图软件读取的 XLSX 经纬度台账。
+          tool_label: KML 转经纬度台账
+          tool_name: kml_to_ledger
+          tool_node_version: '2'
+          tool_parameters: {}
+          type: tool
+        height: 192
+        id: tool
+        position:
+          x: 382
+          y: 282
+        positionAbsolute:
+          x: 382
+          y: 282
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        type: custom
+        width: 242
+      - data:
+          outputs:
+            - value_selector:
+                - tool
+                - files
+              value_type: array[file]
+              variable: files
+            - value_selector:
+                - tool
+                - status
+              value_type: string
+              variable: status
+            - value_selector:
+                - tool
+                - manual_required
+              value_type: boolean
+              variable: manual_required
+            - value_selector:
+                - tool
+                - manual_reason
+              value_type: string
+              variable: manual_reason
+            - value_selector:
+                - tool
+                - file_names
+              value_type: array[string]
+              variable: file_names
+            - value_selector:
+                - tool
+                - line_names
+              value_type: array[string]
+              variable: line_names
+            - value_selector:
+                - tool
+                - line_full_name
+              value_type: string
+              variable: line_full_name
+            - value_selector:
+                - tool
+                - voltage_level
+              value_type: string
+              variable: voltage_level
+            - value_selector:
+                - tool
+                - circuit_type
+              value_type: string
+              variable: circuit_type
+            - value_selector:
+                - tool
+                - tower_count
+              value_type: number
+              variable: tower_count
+            - value_selector:
+                - tool
+                - warnings
+              value_type: array[string]
+              variable: warnings
+            - value_selector:
+                - tool
+                - sha256
+              value_type: string
+              variable: sha256
+            - value_selector:
+                - tool
+                - sha256s
+              value_type: array[string]
+              variable: sha256s
+          selected: false
+          title: 输出
+          type: end
+        height: 180
+        id: end
+        position:
+          x: 684
+          y: 282
+        positionAbsolute:
+          x: 684
+          y: 282
+        selected: false
+        sourcePosition: right
+        targetPosition: left
+        type: custom
+        width: 242
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1
+  rag_pipeline_variables: []

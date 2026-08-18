@@ -1,0 +1,18 @@
+identity:
+  author: internal-kml-ledger
+  name: kml_ledger
+  label:
+    en_US: KML Ledger
+    zh_Hans: KML 经纬度台账
+  description:
+    en_US: Deterministically convert one KML tower file to an XLSX ledger.
+    zh_Hans: 将单个 KML 杆塔文件按规则转换为可供分图软件使用的 XLSX 经纬度台账。
+  icon: icon.svg
+  tags:
+    - utilities
+credentials_for_provider: {}
+tools:
+  - tools/kml_to_ledger.yaml
+extra:
+  python:
+    source: provider/kml_ledger.py
